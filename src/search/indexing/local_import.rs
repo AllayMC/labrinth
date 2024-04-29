@@ -1,22 +1,25 @@
+use std::collections::HashMap;
+
 use chrono::{DateTime, Utc};
 use dashmap::DashMap;
 use futures::TryStreamExt;
 use itertools::Itertools;
 use log::info;
-use std::collections::HashMap;
+use serde_json::{json, Value};
+use sqlx::postgres::PgPool;
 
-use super::IndexingError;
-use crate::database::models::loader_fields::{
-    QueryLoaderField, QueryLoaderFieldEnumValue, QueryVersionField, VersionField,
-};
 use crate::database::models::{
     LoaderFieldEnumId, LoaderFieldEnumValueId, LoaderFieldId, ProjectId, VersionId,
+};
+use crate::database::models::loader_fields::{
+    QueryLoaderField, QueryLoaderFieldEnumValue, QueryVersionField, VersionField,
 };
 use crate::models::projects::from_duplicate_version_fields;
 use crate::models::v2::projects::LegacyProject;
 use crate::routes::v2_reroute;
 use crate::search::UploadSearchProject;
-use sqlx::postgres::PgPool;
+
+use super::IndexingError;
 
 pub async fn index_local(pool: &PgPool) -> Result<Vec<UploadSearchProject>, IndexingError> {
     info!("Indexing local projects!");
@@ -52,20 +55,20 @@ pub async fn index_local(pool: &PgPool) -> Result<Vec<UploadSearchProject>, Inde
         .fetch_many(pool)
         .try_filter_map(|e| async {
             Ok(e.right().map(|m| {
-
-            PartialProject {
-                id: ProjectId(m.id),
-                name: m.name,
-                summary: m.summary,
-                downloads: m.downloads,
-                follows: m.follows,
-                icon_url: m.icon_url,
-                updated: m.updated,
-                approved: m.approved.unwrap_or(m.published),
-                slug: m.slug,
-                color: m.color,
-                license: m.license,
-            }}))
+                PartialProject {
+                    id: ProjectId(m.id),
+                    name: m.name,
+                    summary: m.summary,
+                    downloads: m.downloads,
+                    follows: m.follows,
+                    icon_url: m.icon_url,
+                    updated: m.updated,
+                    approved: m.approved.unwrap_or(m.published),
+                    slug: m.slug,
+                    color: m.color,
+                    license: m.license,
+                }
+            }))
         })
         .try_collect::<Vec<PartialProject>>()
         .await?;
@@ -321,8 +324,8 @@ pub async fn index_local(pool: &PgPool) -> Result<Vec<UploadSearchProject>, Inde
                 let mut categories = categories.clone();
                 categories.append(&mut version_loaders.clone());
 
-                let display_categories = display_categories.clone();
-                categories.append(&mut version_loaders);
+                let mut display_categories = display_categories.clone();
+                display_categories.append(&mut version_loaders);
 
                 // SPECIAL BEHAVIOUR
                 // Todo: revisit.
@@ -361,7 +364,11 @@ pub async fn index_local(pool: &PgPool) -> Result<Vec<UploadSearchProject>, Inde
                 if let Ok(server_side) = serde_json::to_value(server_side) {
                     loader_fields.insert("server_side".to_string(), vec![server_side]);
                 }
-
+                let lfs: Vec<Value> = loader_fields
+                    .get(&format!("{}_api_versions", if let Some(e) = project_loaders.get(0) { e } else { "game_versions" }))
+                    .unwrap_or(&Vec::default())
+                    .clone();
+                loader_fields.insert("game_versions".to_string(), lfs);
                 let usp = UploadSearchProject {
                     version_id: crate::models::ids::VersionId::from(version.id).to_string(),
                     project_id: crate::models::ids::ProjectId::from(project.id).to_string(),

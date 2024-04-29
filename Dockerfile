@@ -9,7 +9,7 @@ COPY docker_utils/dummy.rs .
 # Change temporarely the path of the code
 RUN sed -i 's|src/main.rs|dummy.rs|' Cargo.toml
 # Build only deps
-RUN cargo build --release --features jemalloc
+RUN cargo build --jobs=8 --release --features jemalloc
 # Now return the file back to normal
 RUN sed -i 's|dummy.rs|src/main.rs|' Cargo.toml
 
@@ -17,13 +17,14 @@ RUN sed -i 's|dummy.rs|src/main.rs|' Cargo.toml
 COPY . .
 # Build our code
 ARG SQLX_OFFLINE=true
-RUN cargo build --release --features jemalloc
+#RUN cargo build --release --features jemalloc
+RUN cargo build --release --jobs=8
 
 # Final Stage
 FROM ubuntu:latest
 
 RUN apt-get update \
- && apt-get install -y --no-install-recommends ca-certificates \
+ && apt-get install -y --no-install-recommends ca-certificates curl \
  && apt-get clean \
  && rm -rf /var/lib/apt/lists/*
 

@@ -1,11 +1,12 @@
+use std::collections::HashMap;
 use std::convert::TryFrom;
 
-use std::collections::HashMap;
+use chrono::{DateTime, Utc};
+use itertools::Itertools;
+use serde::{Deserialize, Serialize};
+use validator::Validate;
 
-use super::super::ids::OrganizationId;
-use super::super::teams::TeamId;
-use super::super::users::UserId;
-use crate::database::models::{version_item, DatabaseError};
+use crate::database::models::{DatabaseError, version_item};
 use crate::database::redis::RedisPool;
 use crate::models::ids::{ProjectId, VersionId};
 use crate::models::projects::{
@@ -14,10 +15,10 @@ use crate::models::projects::{
 };
 use crate::models::threads::ThreadId;
 use crate::routes::v2_reroute::{self, capitalize_first};
-use chrono::{DateTime, Utc};
-use itertools::Itertools;
-use serde::{Deserialize, Serialize};
-use validator::Validate;
+
+use super::super::ids::OrganizationId;
+use super::super::teams::TeamId;
+use super::super::users::UserId;
 
 /// A project returned from the API
 #[derive(Serialize, Deserialize, Clone)]
@@ -87,7 +88,7 @@ impl LegacyProject {
             .cloned()
             .unwrap_or("project".to_string()); // Default to 'project' if none are found
 
-        let project_type = if og_project_type == "datapack" || og_project_type == "plugin" {
+        let project_type = if og_project_type == "datapack" {
             // These are not supported in V2, so we'll just use 'mod' instead
             "mod".to_string()
         } else {
@@ -116,7 +117,10 @@ impl LegacyProject {
 
         let game_versions = data
             .fields
-            .get("game_versions")
+            .get(&format!(
+                "{}_api_versions",
+                loaders.first().unwrap_or(&"game_versions".to_string())
+            ))
             .unwrap_or(&Vec::new())
             .iter()
             .filter_map(|v| v.as_str())
@@ -309,6 +313,17 @@ impl From<Version> for LegacyVersion {
     fn from(data: Version) -> Self {
         let mut game_versions = Vec::new();
         if let Some(value) = data.fields.get("game_versions").and_then(|v| v.as_array()) {
+            for gv in value {
+                if let Some(game_version) = gv.as_str() {
+                    game_versions.push(game_version.to_string());
+                }
+            }
+        }
+        if let Some(value) = data
+            .fields
+            .get(&format!("{}_api_versions", data.loaders[0].0))
+            .and_then(|v| v.as_array())
+        {
             for gv in value {
                 if let Some(game_version) = gv.as_str() {
                     game_versions.push(game_version.to_string());

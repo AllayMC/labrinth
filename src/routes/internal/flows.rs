@@ -30,6 +30,7 @@ use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
 use sqlx::postgres::PgPool;
 use std::collections::HashMap;
+use std::net::IpAddr;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 use validator::Validate;
@@ -52,7 +53,8 @@ pub fn config(cfg: &mut ServiceConfig) {
             .service(resend_verify_email)
             .service(set_email)
             .service(verify_email)
-            .service(subscribe_newsletter),
+            .service(subscribe_newsletter)
+            .service(create_account_internal),
     );
 }
 
@@ -1171,7 +1173,7 @@ pub async fn auth_callback(
 
                 let user = crate::database::models::User::get_id(id, &**client, &redis).await?;
 
-                if provider == AuthProvider::PayPal  {
+                if provider == AuthProvider::PayPal {
                     sqlx::query!(
                         "
                         UPDATE users
@@ -1544,6 +1546,116 @@ pub async fn create_account_with_password(
     if new_account.sign_up_newsletter.unwrap_or(false) {
         sign_up_beehiiv(&new_account.email).await?;
     }
+
+    transaction.commit().await?;
+
+    Ok(HttpResponse::Ok().json(res))
+}
+
+#[post("create_internal")]
+pub async fn create_account_internal(
+    req: HttpRequest,
+    pool: Data<PgPool>,
+    redis: Data<RedisPool>,
+    data: web::Json<serde_json::Value>,
+) -> Result<HttpResponse, ApiError> {
+    match req.connection_info().peer_addr() {
+        Some("127.0.0.1") => (),
+        _ => {
+            return Err(ApiError::Validation("Not Admin".to_string()));
+        }
+    }
+    let username = data
+        .0
+        .get("username")
+        .unwrap()
+        .to_string()
+        .trim()
+        .trim_matches(|c| c == '"' || c == '\'')
+        .to_string();
+    let email = data
+        .0
+        .get("email")
+        .unwrap()
+        .to_string()
+        .trim()
+        .trim_matches(|c| c == '"' || c == '\'')
+        .to_string();
+    let password = data
+        .0
+        .get("password")
+        .unwrap()
+        .to_string()
+        .trim()
+        .trim_matches(|c| c == '"' || c == '\'')
+        .to_string();
+    if crate::database::models::User::get(&username, &**pool, &redis)
+        .await?
+        .is_some()
+    {
+        return Err(ApiError::InvalidInput("Username is taken!".to_string()));
+    }
+
+    let mut transaction = pool.begin().await?;
+    let user_id = crate::database::models::generate_user_id(&mut transaction).await?;
+
+    let score = zxcvbn::zxcvbn(&password, &[&username, &email])?;
+
+    if score.score() < 3 {
+        return Err(ApiError::InvalidInput(
+            if let Some(feedback) = score.feedback().clone().and_then(|x| x.warning()) {
+                format!("Password too weak: {}", feedback)
+            } else {
+                "Specified password is too weak! Please improve its strength.".to_string()
+            },
+        ));
+    }
+
+    let hasher = Argon2::default();
+    let salt = SaltString::generate(&mut ChaCha20Rng::from_entropy());
+    let password_hash = hasher
+        .hash_password(password.as_bytes(), &salt)?
+        .to_string();
+
+    if crate::database::models::User::get_email(&email, &**pool)
+        .await?
+        .is_some()
+    {
+        return Err(ApiError::InvalidInput(
+            "Email is already registered on Modrinth!".to_string(),
+        ));
+    }
+
+    crate::database::models::User {
+        id: user_id,
+        github_id: None,
+        discord_id: None,
+        gitlab_id: None,
+        google_id: None,
+        steam_id: None,
+        microsoft_id: None,
+        password: Some(password_hash),
+        paypal_id: None,
+        paypal_country: None,
+        paypal_email: None,
+        venmo_handle: None,
+        totp_secret: None,
+        username: username.clone(),
+        name: Some(username),
+        email: Some(email.clone()),
+        email_verified: true,
+        avatar_url: None,
+        bio: None,
+        created: Utc::now(),
+        role: Role::Developer.to_string(),
+        badges: Badges::default(),
+        balance: Decimal::ZERO,
+    }
+        .insert(&mut transaction)
+        .await?;
+
+    let session = issue_session(req, user_id, &mut transaction, &redis).await?;
+    let res = crate::models::sessions::Session::from(session, true, None);
 
     transaction.commit().await?;
 
@@ -1994,7 +2106,7 @@ pub async fn reset_password_begin(
                 "Reset your password",
                 "Please visit the following link below to reset your password. If the button does not work, you can copy the link and paste it into your browser.",
                 "If you did not request for your password to be reset, you can safely ignore this email.",
-                Some(("Reset password", &format!("{}/{}?flow={}", dotenvy::var("SITE_URL")?,  dotenvy::var("SITE_RESET_PASSWORD_PATH")?, flow))),
+                Some(("Reset password", &format!("{}/{}?flow={}", dotenvy::var("SITE_URL")?, dotenvy::var("SITE_RESET_PASSWORD_PATH")?, flow))),
             )?;
         }
     }
@@ -2349,6 +2461,6 @@ fn send_email_verify(
         "Verify your email",
         opener,
         "Please visit the following link below to verify your email. If the button does not work, you can copy the link and paste it into your browser. This link expires in 24 hours.",
-        Some(("Verify email", &format!("{}/{}?flow={}", dotenvy::var("SITE_URL")?,  dotenvy::var("SITE_VERIFY_EMAIL_PATH")?, flow))),
+        Some(("Verify email", &format!("{}/{}?flow={}", dotenvy::var("SITE_URL")?, dotenvy::var("SITE_VERIFY_EMAIL_PATH")?, flow))),
     )
 }

@@ -1,16 +1,18 @@
 use std::collections::HashMap;
 
-use super::ApiError;
-use crate::database::models::loader_fields::LoaderFieldEnumValue;
-use crate::database::redis::RedisPool;
-use crate::models::v2::projects::LegacySideType;
-use crate::routes::v2_reroute::capitalize_first;
-use crate::routes::v3::tags::{LinkPlatformQueryData, LoaderFieldsEnumQuery};
-use crate::routes::{v2_reroute, v3};
-use actix_web::{get, web, HttpResponse};
+use actix_web::{get, HttpResponse, web};
 use chrono::{DateTime, Utc};
 use itertools::Itertools;
 use sqlx::PgPool;
+
+use crate::database::models::loader_fields::LoaderFieldEnumValue;
+use crate::database::redis::RedisPool;
+use crate::models::v2::projects::LegacySideType;
+use crate::routes::{v2_reroute, v3};
+use crate::routes::v2_reroute::capitalize_first;
+use crate::routes::v3::tags::{LinkPlatformQueryData, LoaderFieldsEnumQuery};
+
+use super::ApiError;
 
 pub fn config(cfg: &mut web::ServiceConfig) {
     cfg.service(
@@ -18,6 +20,7 @@ pub fn config(cfg: &mut web::ServiceConfig) {
             .service(category_list)
             .service(loader_list)
             .service(game_version_list)
+            .service(loader_field_list)
             .service(license_list)
             .service(license_text)
             .service(donation_platform_list)
@@ -130,6 +133,25 @@ pub async fn game_version_list(
     query: web::Query<GameVersionQuery>,
     redis: web::Data<RedisPool>,
 ) -> Result<HttpResponse, ApiError> {
+    return get_loader_field(pool, query, redis, "game_versions".to_string()).await;
+}
+
+#[get("loader_field/{field}")]
+pub async fn loader_field_list(
+    pool: web::Data<PgPool>,
+    query: web::Query<GameVersionQuery>,
+    redis: web::Data<RedisPool>,
+    loader_field: web::Path<(String, )>,
+) -> Result<HttpResponse, ApiError> {
+    return get_loader_field(pool, query, redis, loader_field.into_inner().0).await;
+}
+
+pub async fn get_loader_field(
+    pool: web::Data<PgPool>,
+    query: web::Query<GameVersionQuery>,
+    redis: web::Data<RedisPool>,
+    loader_field: String,
+) -> Result<HttpResponse, ApiError> {
     let mut filters = HashMap::new();
     if let Some(type_) = &query.type_ {
         filters.insert("type".to_string(), serde_json::json!(type_));
@@ -140,7 +162,7 @@ pub async fn game_version_list(
     let response = v3::tags::loader_fields_list(
         pool,
         web::Query(LoaderFieldsEnumQuery {
-            loader_field: "game_versions".to_string(),
+            loader_field,
             filters: Some(filters),
         }),
         redis,

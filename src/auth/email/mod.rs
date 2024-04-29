@@ -1,7 +1,7 @@
+use lettre::{Address, Message, SmtpTransport, Transport};
 use lettre::message::header::ContentType;
 use lettre::message::Mailbox;
-use lettre::transport::smtp::authentication::Credentials;
-use lettre::{Address, Message, SmtpTransport, Transport};
+use lettre::transport::smtp::authentication::{Credentials, Mechanism};
 use thiserror::Error;
 
 #[derive(Error, Debug)]
@@ -19,8 +19,8 @@ pub enum MailError {
 pub fn send_email_raw(to: String, subject: String, body: String) -> Result<(), MailError> {
     let email = Message::builder()
         .from(Mailbox::new(
-            Some("Modrinth".to_string()),
-            Address::new("no-reply", "mail.modrinth.com")?,
+            Some("Bedrinth".to_string()),
+            Address::new("no-reply", "demomailtrap.com")?,
         ))
         .to(to.parse()?)
         .subject(subject)
@@ -32,11 +32,15 @@ pub fn send_email_raw(to: String, subject: String, body: String) -> Result<(), M
     let host = dotenvy::var("SMTP_HOST")?;
     let creds = Credentials::new(username, password);
 
-    let mailer = SmtpTransport::relay(&host)?.credentials(creds).build();
-
-    mailer.send(&email)?;
-
-    Ok(())
+    let mailer = SmtpTransport::starttls_relay(&host)?
+        .credentials(creds)
+        .authentication(vec![Mechanism::Plain])
+        .build();
+    let result: Result<(), MailError> = mailer
+        .send(&email)
+        .map_err(|err| MailError::Smtp(err)) // Convert an error that sent a message to an error of type MailError::Smtp
+        .map(|_| ());
+    result
 }
 
 pub fn send_email(

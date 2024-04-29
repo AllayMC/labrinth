@@ -1,18 +1,30 @@
-use super::project_creation::{CreateError, UploadedFile};
+use std::collections::{HashMap, HashSet};
+use std::sync::Arc;
+
+use actix_multipart::{Field, Multipart};
+use actix_web::{HttpRequest, HttpResponse, web};
+use actix_web::web::Data;
+use chrono::Utc;
+use futures::stream::StreamExt;
+use itertools::Itertools;
+use serde::{Deserialize, Serialize};
+use sqlx::postgres::PgPool;
+use validator::Validate;
+
 use crate::auth::get_user_from_headers;
+use crate::database::models::{self, image_item, Organization};
 use crate::database::models::loader_fields::{LoaderField, LoaderFieldEnumValue, VersionField};
 use crate::database::models::notification_item::NotificationBuilder;
 use crate::database::models::version_item::{
     DependencyBuilder, VersionBuilder, VersionFileBuilder,
 };
-use crate::database::models::{self, image_item, Organization};
 use crate::database::redis::RedisPool;
 use crate::file_hosting::FileHost;
 use crate::models::images::{Image, ImageContext, ImageId};
 use crate::models::notifications::NotificationBody;
 use crate::models::pack::PackFileHash;
 use crate::models::pats::Scopes;
-use crate::models::projects::{skip_nulls, DependencyType};
+use crate::models::projects::{DependencyType, skip_nulls};
 use crate::models::projects::{
     Dependency, FileType, Loader, ProjectId, Version, VersionFile, VersionId, VersionStatus,
     VersionType,
@@ -22,17 +34,8 @@ use crate::queue::session::AuthQueue;
 use crate::util::routes::read_from_field;
 use crate::util::validate::validation_errors_to_string;
 use crate::validate::{validate_file, ValidationResult};
-use actix_multipart::{Field, Multipart};
-use actix_web::web::Data;
-use actix_web::{web, HttpRequest, HttpResponse};
-use chrono::Utc;
-use futures::stream::StreamExt;
-use itertools::Itertools;
-use serde::{Deserialize, Serialize};
-use sqlx::postgres::PgPool;
-use std::collections::{HashMap, HashSet};
-use std::sync::Arc;
-use validator::Validate;
+
+use super::project_creation::{CreateError, UploadedFile};
 
 fn default_requested_status() -> VersionStatus {
     VersionStatus::Listed
@@ -279,9 +282,17 @@ async fn version_create_inner(
                     redis,
                 )
                 .await?;
+
+                //convert common game_versions to loader_api_versions
+                let mut version_create_data_fields = version_create_data.fields.clone();
+                if let Some(gv) = version_create_data_fields.remove("game_versions") {
+                    version_create_data_fields
+                        .insert(format!("{}_api_versions", loaders[0].loader), gv);
+                }
+
                 let version_fields = try_create_version_fields(
                     version_id,
-                    &version_create_data.fields,
+                    &version_create_data_fields,
                     &loader_fields,
                     &mut loader_field_enum_values,
                 )?;
@@ -775,7 +786,7 @@ pub async fn upload_file(
 
     let data = read_from_field(
         field, 500 * (1 << 20),
-        "Project file exceeds the maximum of 500MiB. Contact a moderator or admin to request permission to upload larger files."
+        "Project file exceeds the maximum of 500MiB. Contact a moderator or admin to request permission to upload larger files.",
     ).await?;
 
     let hash = sha1::Sha1::from(&data).hexdigest();
