@@ -1,5 +1,19 @@
-![labrinth banner](https://user-images.githubusercontent.com/12068027/100479891-d6bab300-30ac-11eb-8336-b4cad376a03d.png)
+## Preparation
+- docker
+- rust
 
-## Modrinth's laboratory for its backend service & API!
+## install
+```
+git clone https://github.com/bedrinth/labrinth
+docker-compose up -d
+cargo install --git https://github.com/launchbadge/sqlx sqlx-cli --no-default-features --features postgres,rustls
+sqlx database setup
+cargo run
+```
 
-For contributing information, please see the labrinth section of the [Modrinth contributing guide](https://docs.modrinth.com/docs/details/contributing/#labrinth-backend-and-api). For documentation on the API itself, see the [API Spec](https://docs.modrinth.com/api-spec/).
+## migrant data volume
+```
+docker run --volumes-from db-data -v ${pwd}:/backup ubuntu tar cvf /backup/backup.tar /var/lib/postgresql/data
+sudo docker run -v db-data:/var/lib/postgresql/data --name tmp ubuntu /bin/bash
+docker run --volumes-from db-data -v $(pwd):/backup busybox tar xvf /backup/backup.tar /var/lib/postgresql/data
+```
